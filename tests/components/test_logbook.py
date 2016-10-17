@@ -1,7 +1,8 @@
 """The tests for the logbook component."""
 # pylint: disable=protected-access,too-many-public-methods
-import unittest
 from datetime import timedelta
+import unittest
+from unittest.mock import patch
 
 from homeassistant.components import sun
 import homeassistant.core as ha
@@ -18,13 +19,17 @@ from tests.common import mock_http_component, get_test_home_assistant
 class TestComponentLogbook(unittest.TestCase):
     """Test the History component."""
 
-    EMPTY_CONFIG = logbook.CONFIG_SCHEMA({ha.DOMAIN: {}, logbook.DOMAIN: {}})
+    EMPTY_CONFIG = logbook.CONFIG_SCHEMA({logbook.DOMAIN: {}})
 
     def setUp(self):
         """Setup things to be run when tests are started."""
         self.hass = get_test_home_assistant()
         mock_http_component(self.hass)
-        assert setup_component(self.hass, logbook.DOMAIN, self.EMPTY_CONFIG)
+        self.hass.config.components += ['frontend', 'recorder', 'api']
+        with patch('homeassistant.components.logbook.'
+                   'register_built_in_panel'):
+            assert setup_component(self.hass, logbook.DOMAIN,
+                                   self.EMPTY_CONFIG)
 
     def tearDown(self):
         """Stop everything that was started."""
@@ -44,6 +49,10 @@ class TestComponentLogbook(unittest.TestCase):
             logbook.ATTR_DOMAIN: 'switch',
             logbook.ATTR_ENTITY_ID: 'switch.test_switch'
         }, True)
+
+        # Logbook entry service call results in firing an event.
+        # Our service call will unblock when the event listeners have been
+        # scheduled. This means that they may not have been processed yet.
         self.hass.block_till_done()
 
         self.assertEqual(1, len(calls))
@@ -65,6 +74,10 @@ class TestComponentLogbook(unittest.TestCase):
 
         self.hass.bus.listen(logbook.EVENT_LOGBOOK_ENTRY, event_listener)
         self.hass.services.call(logbook.DOMAIN, 'log', {}, True)
+
+        # Logbook entry service call results in firing an event.
+        # Our service call will unblock when the event listeners have been
+        # scheduled. This means that they may not have been processed yet.
         self.hass.block_till_done()
 
         self.assertEqual(0, len(calls))
@@ -171,6 +184,91 @@ class TestComponentLogbook(unittest.TestCase):
         self.assert_entry(entries[0], name='Home Assistant', message='started',
                           domain=ha.DOMAIN)
         self.assert_entry(entries[1], pointB, 'blu', domain='sensor',
+                          entity_id=entity_id2)
+
+    def test_include_events_entity(self):
+        """Test if events are filtered if entity is included in config."""
+        entity_id = 'sensor.bla'
+        entity_id2 = 'sensor.blu'
+        pointA = dt_util.utcnow()
+        pointB = pointA + timedelta(minutes=logbook.GROUP_BY_MINUTES)
+
+        eventA = self.create_state_changed_event(pointA, entity_id, 10)
+        eventB = self.create_state_changed_event(pointB, entity_id2, 20)
+
+        config = logbook.CONFIG_SCHEMA({
+            ha.DOMAIN: {},
+            logbook.DOMAIN: {logbook.CONF_INCLUDE: {
+                logbook.CONF_ENTITIES: [entity_id2, ]}}})
+        events = logbook._exclude_events((ha.Event(EVENT_HOMEASSISTANT_STOP),
+                                          eventA, eventB), config)
+        entries = list(logbook.humanify(events))
+
+        self.assertEqual(2, len(entries))
+        self.assert_entry(
+            entries[0], name='Home Assistant', message='stopped',
+            domain=ha.DOMAIN)
+        self.assert_entry(
+            entries[1], pointB, 'blu', domain='sensor', entity_id=entity_id2)
+
+    def test_include_events_domain(self):
+        """Test if events are filtered if domain is included in config."""
+        entity_id = 'switch.bla'
+        entity_id2 = 'sensor.blu'
+        pointA = dt_util.utcnow()
+        pointB = pointA + timedelta(minutes=logbook.GROUP_BY_MINUTES)
+
+        eventA = self.create_state_changed_event(pointA, entity_id, 10)
+        eventB = self.create_state_changed_event(pointB, entity_id2, 20)
+
+        config = logbook.CONFIG_SCHEMA({
+            ha.DOMAIN: {},
+            logbook.DOMAIN: {logbook.CONF_INCLUDE: {
+                logbook.CONF_DOMAINS: ['sensor', ]}}})
+        events = logbook._exclude_events((ha.Event(EVENT_HOMEASSISTANT_START),
+                                          eventA, eventB), config)
+        entries = list(logbook.humanify(events))
+
+        self.assertEqual(2, len(entries))
+        self.assert_entry(entries[0], name='Home Assistant', message='started',
+                          domain=ha.DOMAIN)
+        self.assert_entry(entries[1], pointB, 'blu', domain='sensor',
+                          entity_id=entity_id2)
+
+    def test_include_exclude_events(self):
+        """Test if events are filtered if include and exclude is configured."""
+        entity_id = 'switch.bla'
+        entity_id2 = 'sensor.blu'
+        entity_id3 = 'sensor.bli'
+        pointA = dt_util.utcnow()
+        pointB = pointA + timedelta(minutes=logbook.GROUP_BY_MINUTES)
+
+        eventA1 = self.create_state_changed_event(pointA, entity_id, 10)
+        eventA2 = self.create_state_changed_event(pointA, entity_id2, 10)
+        eventA3 = self.create_state_changed_event(pointA, entity_id3, 10)
+        eventB1 = self.create_state_changed_event(pointB, entity_id, 20)
+        eventB2 = self.create_state_changed_event(pointB, entity_id2, 20)
+
+        config = logbook.CONFIG_SCHEMA({
+            ha.DOMAIN: {},
+            logbook.DOMAIN: {
+                logbook.CONF_INCLUDE: {
+                    logbook.CONF_DOMAINS: ['sensor', ],
+                    logbook.CONF_ENTITIES: ['switch.bla', ]},
+                logbook.CONF_EXCLUDE: {
+                    logbook.CONF_DOMAINS: ['switch', ],
+                    logbook.CONF_ENTITIES: ['sensor.bli', ]}}})
+        events = logbook._exclude_events((ha.Event(EVENT_HOMEASSISTANT_START),
+                                          eventA1, eventA2, eventA3,
+                                          eventB1, eventB2), config)
+        entries = list(logbook.humanify(events))
+
+        self.assertEqual(3, len(entries))
+        self.assert_entry(entries[0], name='Home Assistant', message='started',
+                          domain=ha.DOMAIN)
+        self.assert_entry(entries[1], pointA, 'blu', domain='sensor',
+                          entity_id=entity_id2)
+        self.assert_entry(entries[2], pointB, 'blu', domain='sensor',
                           entity_id=entity_id2)
 
     def test_exclude_auto_groups(self):

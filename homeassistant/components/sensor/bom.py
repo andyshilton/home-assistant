@@ -1,10 +1,9 @@
 """
-Support for bom.gov.au current condition weather service.
+Support for Australian BOM (Bureau of Meteorology) weather service.
 
 For more details about this platform, please refer to the documentation at
-https://home-assistant.io/components/sensor.bom_weather_current/
+https://home-assistant.io/components/sensor.bom/
 """
-
 import datetime
 import logging
 import requests
@@ -12,22 +11,22 @@ import requests
 import voluptuous as vol
 
 from homeassistant.components.sensor import PLATFORM_SCHEMA
-from homeassistant.helpers.entity import Entity
-import homeassistant.helpers.config_validation as cv
-from homeassistant.util import Throttle
 from homeassistant.const import (
-    CONF_MONITORED_CONDITIONS, TEMP_CELSIUS,
-    STATE_UNKNOWN, CONF_NAME)
+    CONF_MONITORED_CONDITIONS, TEMP_CELSIUS, STATE_UNKNOWN, CONF_NAME,
+    ATTR_ATTRIBUTION)
+from homeassistant.helpers.entity import Entity
+from homeassistant.util import Throttle
+import homeassistant.helpers.config_validation as cv
 
 _RESOURCE = 'http://www.bom.gov.au/fwo/{}/{}.{}.json'
 _LOGGER = logging.getLogger(__name__)
 
+CONF_ATTRIBUTION = "Data provided by the Australian Bureau of Meteorology"
 CONF_ZONE_ID = 'zone_id'
 CONF_WMO_ID = 'wmo_id'
 
 MIN_TIME_BETWEEN_UPDATES = datetime.timedelta(seconds=60)
 LAST_UPDATE = 0
-
 
 # Sensor types are defined like: Name, units
 SENSOR_TYPES = {
@@ -77,14 +76,14 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
 
 
 def setup_platform(hass, config, add_devices, discovery_info=None):
-    """Setup the BOM sensor."""
-    rest = BOMCurrentData(hass, config.get(CONF_ZONE_ID),
-                          config.get(CONF_WMO_ID))
+    """Set up the BOM sensor."""
+    rest = BOMCurrentData(
+        hass, config.get(CONF_ZONE_ID), config.get(CONF_WMO_ID))
+
     sensors = []
     for variable in config[CONF_MONITORED_CONDITIONS]:
-        sensors.append(BOMCurrentSensor(rest,
-                                        variable,
-                                        config.get(CONF_NAME)))
+        sensors.append(BOMCurrentSensor(
+            rest, variable, config.get(CONF_NAME)))
 
     try:
         rest.update()
@@ -98,7 +97,7 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
 
 
 class BOMCurrentSensor(Entity):
-    """Implementing the BOM current sensor."""
+    """Implementation of a BOM current sensor."""
 
     def __init__(self, rest, condition, stationname):
         """Initialize the sensor."""
@@ -110,10 +109,10 @@ class BOMCurrentSensor(Entity):
     def name(self):
         """Return the name of the sensor."""
         if self.stationname is None:
-            return "BOM {}".format(SENSOR_TYPES[self._condition][0])
+            return 'BOM {}'.format(SENSOR_TYPES[self._condition][0])
         else:
-            return "BOM {} {}".format(self.stationname,
-                                      SENSOR_TYPES[self._condition][0])
+            return 'BOM {} {}'.format(
+                self.stationname, SENSOR_TYPES[self._condition][0])
 
     @property
     def state(self):
@@ -133,6 +132,7 @@ class BOMCurrentSensor(Entity):
         attr['Station Name'] = self.rest.data['name']
         attr['Last Update'] = datetime.datetime.strptime(str(
             self.rest.data['local_date_time_full']), '%Y%m%d%H%M%S')
+        attr[ATTR_ATTRIBUTION] = CONF_ATTRIBUTION
         return attr
 
     @property
@@ -165,9 +165,9 @@ class BOMCurrentData(object):
     @Throttle(MIN_TIME_BETWEEN_UPDATES)
     def update(self):
         """Get the latest data from BOM."""
-        if ((self._lastupdate != 0)
-                and ((datetime.datetime.now() - self._lastupdate)) <
-                datetime.timedelta(minutes=35)):
+        if self._lastupdate != 0 and \
+            ((datetime.datetime.now() - self._lastupdate) <
+             datetime.timedelta(minutes=35)):
             _LOGGER.info(
                 "BOM was updated %s minutes ago, skipping update as"
                 " < 35 minutes", (datetime.datetime.now() - self._lastupdate))
